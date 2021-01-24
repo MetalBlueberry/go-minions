@@ -37,13 +37,16 @@ type Job struct {
 }
 
 func (job *Job) Work(ctx context.Context) {
+	// notify individual job is finished
 	defer job.finisher.Finish()
 
+	// Track start & end time
 	job.Start = time.Now()
 	defer func() { job.End = time.Now() }()
 
 	job.Status = Running
 
+	// Run job
 	job.Job.Work(ctx)
 
 	job.Status = Done
