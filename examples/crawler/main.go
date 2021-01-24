@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/MetalBlueberry/go-minions/pkg/minions"
@@ -18,7 +19,7 @@ func main() {
 	// There is a lock condition that happens when this queue is full, but anyway...
 	quest := make(chan minions.Worker, 1000)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
 	defer cancel()
 
 	lord.StartQuest(
@@ -27,13 +28,21 @@ func main() {
 		quest,
 	)
 
+	wg := &sync.WaitGroup{}
+
 	found := make(chan DomainCrawler)
 	links := map[string]int{}
 	go func() {
 		for {
-			crawl := <-found
+			crawl, open := <-found
+			if !open {
+				log.Print("no more found, finishing quest")
+				close(quest)
+				return
+			}
 			if _, visited := links[crawl.URL]; !visited {
-				log.Printf("visited %s", crawl.URL)
+				log.Printf("visiting %s", crawl.URL)
+				wg.Add(1)
 				quest <- crawl
 			} else {
 				log.Printf("skip, already visited %s", crawl.URL)
@@ -45,12 +54,18 @@ func main() {
 	crawler := DomainCrawler{
 		Client: http.DefaultClient,
 		Domain: "github.com",
-		Depth:  -1,
+		Depth:  2,
 		Found:  found,
 		URL:    "https://github.com/MetalBlueberry",
+		wg:     wg,
 	}
-	found <- crawler
 
+	wg.Add(1)
+	quest <- crawler
+	go func() {
+		wg.Wait()
+		close(found)
+	}()
 	lord.Wait()
 
 	encoder := json.NewEncoder(os.Stdout)
@@ -68,6 +83,7 @@ type DomainCrawler struct {
 	URL    string
 	Depth  int
 	Found  chan<- DomainCrawler
+	wg     *sync.WaitGroup
 }
 
 func (crawler DomainCrawler) Navigate(target string) DomainCrawler {
@@ -78,12 +94,16 @@ func (crawler DomainCrawler) Navigate(target string) DomainCrawler {
 		Client: crawler.Client,
 		Domain: crawler.Domain,
 		Found:  crawler.Found,
+		wg:     crawler.wg,
 	}
 
 }
 
 func (crawler DomainCrawler) Work(ctx context.Context) {
 	log.Printf("Crawling %s", crawler.URL)
+
+	defer crawler.wg.Done()
+
 	parsed, err := url.Parse(crawler.URL)
 	if err != nil {
 		log.Printf("Cannot parse url %s, %s", crawler.URL, err)
@@ -106,6 +126,9 @@ func (crawler DomainCrawler) Work(ctx context.Context) {
 		log.Printf("Cannot create request url %s, %s", crawler.URL, err)
 		return
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
 
 	response, err := crawler.Client.Do(request.WithContext(ctx))
 	if err != nil {
