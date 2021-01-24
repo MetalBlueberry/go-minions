@@ -35,6 +35,13 @@ func (master *Lord) worker(ctx context.Context, input <-chan Worker) {
 	defer master.wg.Done()
 	done := ctx.Done()
 	for {
+		// Check first if context is cancelled
+		select {
+		case <-done:
+			return
+		default:
+		}
+
 		select {
 		case worker, open := <-input:
 			if !open {
