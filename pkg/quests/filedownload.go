@@ -2,6 +2,7 @@ package quests
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -48,6 +49,11 @@ func (worker *FileDownload) Work(ctx context.Context) {
 	defer res.Body.Close()
 	defer worker.Storage.Close()
 
+	if res.StatusCode != http.StatusOK {
+		worker.Err = fmt.Errorf("Status not OK, %d", res.StatusCode)
+		return
+	}
+
 	_, err = io.Copy(worker.Storage, res.Body)
 	if err != nil {
 		worker.Err = err
@@ -58,4 +64,9 @@ func (worker *FileDownload) Work(ctx context.Context) {
 // Wait blocks until the download is finished
 func (worker *FileDownload) Wait(ctx context.Context) error {
 	return worker.finisher.Wait(ctx)
+}
+
+// Status returns the error status
+func (worker *FileDownload) Status() error {
+	return worker.Err
 }
